@@ -1,0 +1,97 @@
+name: Check Changes
+
+on:
+  schedule:
+    # 07:00 UTC each day
+    - cron:  '0 7 * * *'
+  
+  push:
+    tags: ['*']
+
+  workflow_dispatch:
+  
+jobs:
+  get_tags:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.get.outputs.result }}
+      empty_tags: ${{ steps.check.outputs.result }}
+    steps:
+      - name: Docker target tags
+        id: fetch_target_tags
+        uses: mxpicture/action-docker-hub-fetch-tags@v1
+        with:
+          repository: mxpicture/postgres
+          max_items: "999999"
+
+      - name: Docker source tags
+        id: fetch_source_tags
+        uses: mxpicture/action-docker-hub-fetch-tags@v1
+        with:
+          repository: postgres
+          max_items: "999999"
+
+      - name: Get tags, compare docker hub image dates
+        uses: actions/github-script@v5
+        id: get
+        with:
+          script: |
+            const tags = (await github.request("https://api.github.com/repos/" 
+              + context.repo.owner + "/" + context.repo.repo + "/tags")).data
+            const target_tags = ${{ steps.fetch_target_tags.outputs.results }}
+            const source_tags = ${{ steps.fetch_source_tags.outputs.results }}
+            let output = []
+            for (const tag of tags) {
+              console.log("Processing tag: " + tag.name)
+              for (const source_tag of source_tags) {
+                if ( source_tag.name === tag.name ) {
+                  let found = false
+                  for (const target_tag of target_tags) {
+                    if ( source_tag.name === target_tag.name ) {
+                      found = true
+                      console.log("Last updated (source): " + source_tag.last_updated)
+                      console.log("Last updated (target): " + target_tag.last_updated)
+                      if ( source_tag.last_updated > target_tag.last_updated ) {
+                        console.log("Trigger event for tag: " + tag.name)
+                        output.push({ "name": tag.name })
+                      }
+                    }
+                  } 
+                  if (found != true) {
+                    console.log("Trigger event for tag: " + tag.name)
+                    output.push({ "name": tag.name })
+                  } 
+                }
+              }
+            }
+            return output
+      - name: Check tags empty
+        uses: actions/github-script@v5
+        id: check
+        with:
+          script: |
+            let output = ${{ steps.get.outputs.result }}
+            console.log("Count tags: " + (output.length))
+            
+            if (output.length == 0) {
+              console.log("empty")
+              return 'true'
+            } else {
+              console.log("not empty")
+              return 'false'
+            }
+  dispatch:
+    needs: get_tags
+    if: ${{ fromJSON(needs.get_tags.outputs.empty_tags) == 'false' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: 
+        tag: ${{ fromJSON(needs.get_tags.outputs.tags) }}
+    steps:
+      - name: Dispatch deploy
+        uses: peter-evans/repository-dispatch@v1
+        with:
+          token: ${{ secrets.ACCESS_TOKEN }}
+          repository: ${{ github.repository }}
+          event-type: docker_hub
+          client-payload: '{"tag": "${{ matrix.tag.name }}"}'

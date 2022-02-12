@@ -1,1 +1,1 @@
-# docker-redis-doppler
+# Redis Docker Image incl. doppler integration

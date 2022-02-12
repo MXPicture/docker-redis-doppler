@@ -1,0 +1,60 @@
+name: Force deploy all
+
+on:
+  push:
+    branches:    
+      - 'release_mxpicture'
+
+  workflow_dispatch:
+  
+jobs:
+  get_tags:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.get.outputs.result }}
+      empty_tags: ${{ steps.check.outputs.result }}
+    steps:
+      - name: Get tags
+        uses: actions/github-script@v5
+        id: get
+        with:
+          script: |
+            const tags = (await github.request("https://api.github.com/repos/" 
+              + context.repo.owner + "/" + context.repo.repo + "/tags")).data
+            
+            let output = []
+            
+            for(let i=0; i<tags.length; i++) {
+              output.push({ "name": tags[i].name })
+            }
+            return output
+      - name: Check tags empty
+        uses: actions/github-script@v5
+        id: check
+        with:
+          script: |
+            let output = ${{ steps.get.outputs.result }}
+            console.log("Count tags: " + (output.length))
+            
+            if (output.length == 0) {
+              console.log("empty")
+              return 'true'
+            } else {
+              console.log("not empty")
+              return 'false'
+            }
+  dispatch:
+    needs: get_tags
+    if: ${{ fromJSON(needs.get_tags.outputs.empty_tags) == 'false' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: 
+        tag: ${{ fromJSON(needs.get_tags.outputs.tags) }}
+    steps:
+      - name: Dispatch deploy
+        uses: peter-evans/repository-dispatch@v1
+        with:
+          token: ${{ secrets.ACCESS_TOKEN }}
+          repository: ${{ github.repository }}
+          event-type: docker_hub
+          client-payload: '{"tag": "${{ matrix.tag.name }}"}'
